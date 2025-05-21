@@ -1,242 +1,234 @@
-import argparse
+#!/usr/bin/env python3
+"""
+Proxy Scraper Module - Scrapes free proxies from various sources
+"""
+
 import asyncio
-import platform
+import os
 import re
 import sys
-import time
+from concurrent.futures import ThreadPoolExecutor
 
-import httpx
-from bs4 import BeautifulSoup
+# Check for required packages and install if missing
+try:
+    import httpx
+    from bs4 import BeautifulSoup
+except ImportError:
+    import subprocess
+    print("Installing required packages for proxy scraping...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "httpx", "beautifulsoup4"])
+    import httpx
+    from bs4 import BeautifulSoup
 
+# Optimized timeouts and connection settings
+CONNECT_TIMEOUT = 3  # Ultra-fast initial connection timeout
+READ_TIMEOUT = 5    # Faster read timeout
+MAX_CONNECTIONS = 200  # Increased maximum concurrent connections
+RETRY_COUNT = 2     # Reduced retries for faster execution
 
-class Scraper:
+# List of proxy sources
+PROXY_SOURCES = {
+    "http": [
+        "https://www.sslproxies.org/",
+        "https://free-proxy-list.net/",
+        "https://us-proxy.org/",
+        "https://www.proxy-list.download/api/v1/get?type=http",
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http",
+        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+        "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt",
+        "https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt",
+        "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
+    ],
+    "https": [
+        "https://www.sslproxies.org/",
+        "https://free-proxy-list.net/",
+        "https://us-proxy.org/",
+        "https://www.proxy-list.download/api/v1/get?type=https",
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&ssl=true",
+        "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/https.txt",
+        "https://raw.githubusercontent.com/mmpx12/proxy-list/master/https.txt",
+        "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/https.txt",
+    ],
+    "socks4": [
+        "https://www.socks-proxy.net/",
+        "https://www.proxy-list.download/api/v1/get?type=socks4",
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks4",
+        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",
+        "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks4.txt",
+        "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks4.txt",
+        "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt",
+    ],
+    "socks5": [
+        "https://www.socks-proxy.net/",
+        "https://www.proxy-list.download/api/v1/get?type=socks5",
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5",
+        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
+        "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks5.txt",
+        "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt",
+        "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
+    ],
+}
 
-    def __init__(self, method, _url):
-        self.method = method
-        self._url = _url
-
-    def get_url(self, **kwargs):
-        return self._url.format(**kwargs, method=self.method)
-
-    async def get_response(self, client):
-        return await client.get(self.get_url())
-
-    async def handle(self, response):
-        return response.text
-
-    async def scrape(self, client):
-        response = await self.get_response(client)
-        proxies = await self.handle(response)
-        pattern = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?")
-        return re.findall(pattern, proxies)
-
-
-# From spys.me
-class SpysMeScraper(Scraper):
-
-    def __init__(self, method):
-        super().__init__(method, "https://spys.me/{mode}.txt")
-
-    def get_url(self, **kwargs):
-        mode = "proxy" if self.method == "http" else "socks" if self.method == "socks" else "unknown"
-        if mode == "unknown":
-            raise NotImplementedError
-        return super().get_url(mode=mode, **kwargs)
-
-
-# From proxyscrape.com
-class ProxyScrapeScraper(Scraper):
-
-    def __init__(self, method, timeout=1000, country="All"):
-        self.timout = timeout
-        self.country = country
-        super().__init__(method,
-                         "https://api.proxyscrape.com/?request=getproxies"
-                         "&proxytype={method}"
-                         "&timeout={timout}"
-                         "&country={country}")
-
-    def get_url(self, **kwargs):
-        return super().get_url(timout=self.timout, country=self.country, **kwargs)
-
-# From geonode.com - A little dirty, grab http(s) and socks but use just for socks
-class GeoNodeScraper(Scraper):
-
-    def __init__(self, method, limit="500", page="1", sort_by="lastChecked", sort_type="desc"):
-        self.limit = limit
-        self.page = page
-        self.sort_by = sort_by
-        self.sort_type = sort_type
-        super().__init__(method,
-                         "https://proxylist.geonode.com/api/proxy-list?"
-                         "&limit={limit}"
-                         "&page={page}"
-                         "&sort_by={sort_by}"
-                         "&sort_type={sort_type}")
-
-    def get_url(self, **kwargs):
-        return super().get_url(limit=self.limit, page=self.page, sort_by=self.sort_by, sort_type=self.sort_type, **kwargs)
-
-# From proxy-list.download
-class ProxyListDownloadScraper(Scraper):
-
-    def __init__(self, method, anon):
-        self.anon = anon
-        super().__init__(method, "https://www.proxy-list.download/api/v1/get?type={method}&anon={anon}")
-
-    def get_url(self, **kwargs):
-        return super().get_url(anon=self.anon, **kwargs)
+# Headers for making HTTP requests
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+}
 
 
-# For websites using table in html
-class GeneralTableScraper(Scraper):
-
-    async def handle(self, response):
-        soup = BeautifulSoup(response.text, "html.parser")
-        proxies = set()
-        table = soup.find("table", attrs={"class": "table table-striped table-bordered"})
-        for row in table.findAll("tr"):
-            count = 0
-            proxy = ""
-            for cell in row.findAll("td"):
-                if count == 1:
-                    proxy += ":" + cell.text.replace("&nbsp;", "")
-                    proxies.add(proxy)
-                    break
-                proxy += cell.text.replace("&nbsp;", "")
-                count += 1
-        return "\n".join(proxies)
-
-
-# For websites using div in html
-class GeneralDivScraper(Scraper):
-
-    async def handle(self, response):
-        soup = BeautifulSoup(response.text, "html.parser")
-        proxies = set()
-        table = soup.find("div", attrs={"class": "list"})
-        for row in table.findAll("div"):
-            count = 0
-            proxy = ""
-            for cell in row.findAll("div", attrs={"class": "td"}):
-                if count == 2:
-                    break
-                proxy += cell.text+":"
-                count += 1
-            proxy = proxy.rstrip(":")
-            proxies.add(proxy)
-        return "\n".join(proxies)
-    
-# For scraping live proxylist from github
-class GitHubScraper(Scraper):
-        
-    async def handle(self, response):
-        tempproxies = response.text.split("\n")
-        proxies = set()
-        for prxy in tempproxies:
-            if self.method in prxy:
-                proxies.add(prxy.split("//")[-1])
-
-        return "\n".join(proxies)
-
-
-scrapers = [
-    SpysMeScraper("http"),
-    SpysMeScraper("socks"),
-    ProxyScrapeScraper("http"),
-    ProxyScrapeScraper("socks4"),
-    ProxyScrapeScraper("socks5"),
-    GeoNodeScraper("socks"),
-    ProxyListDownloadScraper("https", "elite"),
-    ProxyListDownloadScraper("http", "elite"),
-    ProxyListDownloadScraper("http", "transparent"),
-    ProxyListDownloadScraper("http", "anonymous"),
-    GeneralTableScraper("https", "http://sslproxies.org"),
-    GeneralTableScraper("http", "http://free-proxy-list.net"),
-    GeneralTableScraper("http", "http://us-proxy.org"),
-    GeneralTableScraper("socks", "http://socks-proxy.net"),
-    GeneralDivScraper("http", "https://freeproxy.lunaproxy.com/"),
-    GitHubScraper("http", "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt"),
-    GitHubScraper("socks4", "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt"),
-    GitHubScraper("socks5", "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt"),
-    GitHubScraper("http", "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt"),
-    GitHubScraper("socks", "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt"),
-    GitHubScraper("https", "https://raw.githubusercontent.com/zloi-user/hideip.me/main/https.txt"),
-    GitHubScraper("http", "https://raw.githubusercontent.com/zloi-user/hideip.me/main/http.txt"),
-    GitHubScraper("socks4", "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks4.txt"),
-    GitHubScraper("socks5", "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks5.txt"),
-]
-
-def verbose_print(verbose, message):
+async def scrape_from_url(url, proxy_type, verbose=False):
+    """Scrape proxies from a URL with optimized error handling"""
+    proxies = set()
     if verbose:
-        print(message)
-
-async def scrape(method, output, verbose):
-    now = time.time()
-    methods = [method]
-    if method == "socks":
-        methods += ["socks4", "socks5"]
-    proxy_scrapers = [s for s in scrapers if s.method in methods]
-    if not proxy_scrapers:
-        raise ValueError("Method not supported")
-    verbose_print(verbose, "Scraping proxies...")
-    proxies = []
-
-    tasks = []
-    client = httpx.AsyncClient(follow_redirects=True)
-
-    async def scrape_scraper(scraper):
+        print(f"Scraping from: {url}")
+    
+    # Try with retries for reliability
+    for attempt in range(1, RETRY_COUNT + 1):
         try:
-            verbose_print(verbose, f"Looking {scraper.get_url()}...")
-            proxies.extend(await scraper.scrape(client))
-        except Exception:
-            pass
+            # Faster timeout settings
+            timeout = httpx.Timeout(6.0, connect=CONNECT_TIMEOUT, read=READ_TIMEOUT)
+            async with httpx.AsyncClient(
+                timeout=timeout, 
+                headers=HEADERS, 
+                limits=httpx.Limits(max_connections=MAX_CONNECTIONS),
+                follow_redirects=True  # Follow redirects automatically
+            ) as client:
+                response = await client.get(url)
+                break  # Success, exit retry loop
+        except (httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+            if attempt < RETRY_COUNT and verbose:
+                print(f"Timeout error on {url}, attempt {attempt}/{RETRY_COUNT}")
+            if attempt == RETRY_COUNT:
+                if verbose:
+                    print(f"Failed to connect to {url} after {RETRY_COUNT} attempts: {str(e)}")
+                return proxies
+    
+    try:
+            
+        if response.status_code != 200:
+            if verbose:
+                print(f"Failed to retrieve from {url}: Status {response.status_code}")
+            return proxies
+        
+        # Different parsing based on URL
+        if "free-proxy-list.net" in url or "us-proxy.org" in url or "sslproxies.org" in url or "socks-proxy.net" in url:            # Parse table-based sites
+            soup = BeautifulSoup(response.text, "html.parser")
+            table = soup.find("table", {"id": "proxylisttable"})
+            
+            if not table:
+                return proxies
+            
+            # Get table rows
+            rows = table.find_all("tr")
+            for row in rows:
+                cells = row.find_all("td")
+                if len(cells) > 1:
+                    ip = cells[0].text.strip()
+                    port = cells[1].text.strip()
+                    
+                    # Check if proxy matches required type
+                    if "socks-proxy.net" in url:
+                        row_type = cells[4].text.strip().lower()
+                        if proxy_type.lower() not in row_type:
+                            continue
+                    elif "sslproxies.org" in url or ("free-proxy-list.net" in url and proxy_type == "https"):
+                        https_cell = cells[6].text.strip().lower()
+                        if proxy_type == "https" and https_cell != "yes":
+                            continue
+                        if proxy_type == "http" and https_cell == "yes":
+                            continue
+                    
+                    # Add proxy to set
+                    proxy = f"{ip}:{port}"
+                    proxies.add(proxy)
+        else:
+            # Plain text proxies
+            content = response.text
+            
+            # Find all IP:PORT patterns
+            pattern = r"\b(?:\d{1,3}\.){3}\d{1,3}:\d{1,5}\b"
+            found_proxies = re.findall(pattern, content)
+            
+            # Add to our set
+            proxies.update(found_proxies)
+    
+    except Exception as e:
+        if verbose:
+            print(f"Error scraping from {url}: {str(e)}")
+    
+    return proxies
 
-    for scraper in proxy_scrapers:
-        tasks.append(asyncio.ensure_future(scrape_scraper(scraper)))
 
-    await asyncio.gather(*tasks)
-    await client.aclose()
+async def scrape(proxy_type, output_file, verbose=False, fast_mode=True):
+    """Main function to scrape proxies of a specific type with fast mode option"""
+    if proxy_type.lower() not in PROXY_SOURCES:
+        raise ValueError(f"Unsupported proxy type: {proxy_type}. Use http, https, socks4, or socks5.")
+    
+    # Create output directory if needed (only if it doesn't exist)
+    output_dir = os.path.dirname(output_file)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    # Get sources for this proxy type
+    sources = PROXY_SOURCES[proxy_type.lower()]
+    
+    # In fast mode, use only the most reliable and fastest sources
+    if fast_mode:
+        # These are the typically most reliable and fastest sources
+        fast_sources = [
+            "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",  # Usually very reliable
+            "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http",        # Fast API service
+            "https://www.proxy-list.download/api/v1/get?type=http"                     # Another fast API
+        ]
+        # Use the specified fast sources if they're in our source list, otherwise use the first 2
+        sources = [src for src in fast_sources if src in sources]
+        if not sources and len(PROXY_SOURCES[proxy_type.lower()]) > 0:
+            sources = PROXY_SOURCES[proxy_type.lower()][:2]
+    
+    if verbose:
+        print(f"Scraping {proxy_type} proxies from {len(sources)} sources...")
+      # Scrape from all sources concurrently with optimized gathering
+    results = await asyncio.gather(*[scrape_from_url(url, proxy_type, verbose) for url in sources])
+    
+    # Combine results directly to a set for faster deduplication
+    all_proxies = set().union(*results)
+    
+    # Skip sorting for speed in fast mode
+    unique_proxies = list(all_proxies)
+    
+    # Faster file writing (write all at once)
+    with open(output_file, "w") as f:
+        f.write('\n'.join(unique_proxies))
+    
+    if verbose:
+        print(f"Scraped {len(unique_proxies)} unique {proxy_type} proxies and saved to {output_file}")
+    
+    return len(unique_proxies)
 
-    proxies = set(proxies)
-    verbose_print(verbose, f"Writing {len(proxies)} proxies to file...")
-    with open(output, "w") as f:
-        f.write("\n".join(proxies))
-    verbose_print(verbose, "Done!")
-    verbose_print(verbose, f"Took {time.time() - now} seconds")
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-p",
-        "--proxy",
-        help="Supported proxy type: " + ", ".join(sorted(set([s.method for s in scrapers]))),
-        required=True,
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        help="Output file name to save .txt file",
-        default="output.txt",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        help="Increase output verbosity",
-        action="store_true",
-    )
+# For testing
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Proxy Scraper")
+    parser.add_argument("-t", "--type", help="Proxy type (http, https, socks4, socks5)", default="http")
+    parser.add_argument("-o", "--output", help="Output file", default="proxies.txt")
+    parser.add_argument("-v", "--verbose", help="Verbose output", action="store_true")
+    parser.add_argument("-f", "--fast", help="Fast mode - use fewer sources for quicker results", action="store_true", default=True)
+    
     args = parser.parse_args()
-
-    if sys.version_info >= (3, 7) and platform.system() == 'Windows':
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(scrape(args.proxy, args.output, args.verbose))
-        loop.close()
-    elif sys.version_info >= (3, 7):
-        asyncio.run(scrape(args.proxy, args.output, args.verbose))
+    
+    # Use optimized event loop policy if available
+    if sys.platform == 'win32' and hasattr(asyncio, 'WindowsSelectorEventLoopPolicy'):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
+    if sys.version_info >= (3, 7):
+        asyncio.run(scrape(args.type, args.output, args.verbose, args.fast))
     else:
         loop = asyncio.get_event_loop()
-        loop.run_until_complete(scrape(args.proxy, args.output, args.verbose))
+        loop.run_until_complete(scrape(args.type, args.output, args.verbose, args.fast))
         loop.close()
-
-if __name__ == "__main__":
-    main()

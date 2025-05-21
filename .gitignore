@@ -1,4 +1,18 @@
+# ProxyMaster specific files
 output.txt
+proxies.txt
+http_proxies.txt
+https_proxies.txt
+socks4_proxies.txt
+socks5_proxies.txt
+test_proxies.txt
+fast_proxies.txt
+ultra_fast_proxies.txt
+fresh_*_proxies.txt
+proxy_cache.json
+*.log
+temp_*.*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
