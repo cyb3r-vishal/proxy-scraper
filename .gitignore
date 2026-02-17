@@ -1,16 +1,9 @@
-# ProxyMaster specific files
-output.txt
-proxies.txt
-http_proxies.txt
-https_proxies.txt
-socks4_proxies.txt
-socks5_proxies.txt
-test_proxies.txt
-fast_proxies.txt
-ultra_fast_proxies.txt
-fresh_*_proxies.txt
-proxy_cache.json
+# ProxyScraper
+output/
+logs/
+.env
 *.log
+proxy_cache.json
 temp_*.*
 
 # Byte-compiled / optimized / DLL files

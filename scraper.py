@@ -11,44 +11,76 @@ from bs4 import BeautifulSoup
 
 SOURCES = {
     "http": [
+        # ── Web table sites ──
         "https://www.sslproxies.org/",
         "https://free-proxy-list.net/",
         "https://us-proxy.org/",
+        # ── API services ──
         "https://www.proxy-list.download/api/v1/get?type=http",
-        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http",
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all",
+        "https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc&protocols=http",
+        # ── GitHub raw lists (auto-updated) ──
         "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
         "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt",
         "https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt",
         "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
-        "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
+        "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt",
+        "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
+        "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",
+        "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/http.txt",
+        "https://raw.githubusercontent.com/prxchk/proxy-list/main/http.txt",
     ],
     "https": [
+        # ── Web table sites ──
         "https://www.sslproxies.org/",
         "https://free-proxy-list.net/",
         "https://us-proxy.org/",
+        # ── API services ──
         "https://www.proxy-list.download/api/v1/get?type=https",
-        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&ssl=true",
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&ssl=true&timeout=10000&country=all",
+        "https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc&protocols=https",
+        # ── GitHub raw lists ──
         "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/https.txt",
         "https://raw.githubusercontent.com/mmpx12/proxy-list/master/https.txt",
         "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/https.txt",
+        "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-https.txt",
+        "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
+        "https://raw.githubusercontent.com/prxchk/proxy-list/main/https.txt",
     ],
     "socks4": [
+        # ── Web table sites ──
         "https://www.socks-proxy.net/",
+        # ── API services ──
         "https://www.proxy-list.download/api/v1/get?type=socks4",
-        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks4",
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks4&timeout=10000&country=all",
+        "https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc&protocols=socks4",
+        # ── GitHub raw lists ──
         "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",
         "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks4.txt",
         "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks4.txt",
         "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt",
+        "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks4.txt",
+        "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS4_RAW.txt",
+        "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/socks4.txt",
+        "https://raw.githubusercontent.com/prxchk/proxy-list/main/socks4.txt",
     ],
     "socks5": [
+        # ── Web table sites ──
         "https://www.socks-proxy.net/",
+        # ── API services ──
         "https://www.proxy-list.download/api/v1/get?type=socks5",
-        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5",
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=all",
+        "https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc&protocols=socks5",
+        # ── GitHub raw lists ──
         "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
         "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks5.txt",
         "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt",
         "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
+        "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks5.txt",
+        "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt",
+        "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
+        "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/socks5.txt",
+        "https://raw.githubusercontent.com/prxchk/proxy-list/main/socks5.txt",
     ],
 }
 
@@ -121,6 +153,23 @@ def _parse_plain(text: str) -> set[str]:
     return set(IP_PORT_RE.findall(text))
 
 
+def _parse_geonode(text: str) -> set[str]:
+    """Parse geonode.com JSON API response."""
+    import json
+    proxies: set[str] = set()
+    try:
+        data = json.loads(text)
+        for entry in data.get("data", []):
+            ip = entry.get("ip", "")
+            port = entry.get("port", "")
+            if ip and port:
+                proxies.add(f"{ip}:{port}")
+    except (json.JSONDecodeError, KeyError, TypeError):
+        # Fallback to regex
+        proxies = set(IP_PORT_RE.findall(text))
+    return proxies
+
+
 async def _fetch_source(
     client: httpx.AsyncClient, url: str, proxy_type: str
 ) -> set[str]:
@@ -133,6 +182,8 @@ async def _fetch_source(
 
             if _is_table_site(url):
                 return _parse_table(resp.text, url, proxy_type)
+            if "geonode.com" in url:
+                return _parse_geonode(resp.text)
             return _parse_plain(resp.text)
 
         except (httpx.TimeoutException, httpx.ConnectError, httpx.HTTPError):
@@ -161,16 +212,20 @@ def _validate_ip_port(proxy: str) -> bool:
         return False
 
 
-async def scrape(proxy_type: str) -> list[str]:
+async def scrape(proxy_type: str, max_proxies: int = 0) -> list[str]:
     """
     Scrape proxies of the given type from all sources.
 
     Args:
         proxy_type: One of 'http', 'https', 'socks4', 'socks5'.
+        max_proxies: Cap the returned list at this size (0 = no cap).
+                     The list is shuffled before capping for variety.
 
     Returns:
         Deduplicated list of proxy strings (ip:port).
     """
+    import random
+
     proxy_type = proxy_type.lower()
     if proxy_type not in SOURCES:
         raise ValueError(
@@ -199,5 +254,12 @@ async def scrape(proxy_type: str) -> list[str]:
 
     # Filter out malformed entries
     valid = [p for p in all_proxies if _validate_ip_port(p)]
-    valid.sort()
+
+    # Shuffle + cap to avoid wasting time checking 100K+ proxies
+    if max_proxies > 0 and len(valid) > max_proxies:
+        random.shuffle(valid)
+        valid = valid[:max_proxies]
+    else:
+        valid.sort()
+
     return valid

@@ -15,13 +15,13 @@ import httpx
 
 # Validation endpoints — proxy must respond correctly on ALL of these
 VALIDATION_URLS = [
-    "http://httpbin.org/ip",
     "http://icanhazip.com",
     "http://api.ipify.org",
+    "http://ip.me",
 ]
 
 # HTTPS endpoint for HTTPS proxy verification
-HTTPS_VALIDATION_URL = "https://httpbin.org/ip"
+HTTPS_VALIDATION_URL = "https://api.ipify.org"
 
 IP_PATTERN = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
 
@@ -228,9 +228,9 @@ async def check_proxy(proxy_str: str, proto: str) -> ProxyResult:
         elif proto in ("socks4", "socks5"):
             # For SOCKS we do a handshake test to multiple destinations
             test_targets = [
-                ("httpbin.org", 80),
                 ("icanhazip.com", 80),
                 ("api.ipify.org", 80),
+                ("ip.me", 80),
             ]
             result.checks_total = len(test_targets)
 
@@ -263,6 +263,7 @@ async def check_all(
     proxies: list[str],
     proto: str,
     on_progress=None,
+    target: int = 0,
 ) -> list[ProxyResult]:
     """
     Validate all proxies in batches with bounded concurrency.
@@ -271,6 +272,7 @@ async def check_all(
         proxies: List of 'ip:port' strings.
         proto: Protocol type.
         on_progress: Optional callback(checked: int, total: int, result: ProxyResult)
+        target: Stop early once this many live proxies found (0 = check all).
 
     Returns:
         List of ProxyResult for proxies that passed ALL checks (100% live).
@@ -309,6 +311,10 @@ async def check_all(
                 dummy = ProxyResult(proxy="?", proto=proto)
                 if on_progress:
                     on_progress(checked, total, dummy)
+
+        # Early stop if we've reached the target
+        if target > 0 and len(live) >= target:
+            break
 
     # Sort by response time (fastest first)
     live.sort(key=lambda r: r.response_time)

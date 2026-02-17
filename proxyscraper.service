@@ -1,0 +1,24 @@
+[Unit]
+Description=ProxyScraper Daemon — 24/7 proxy scraper & validator with Telegram
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/proxy-scraper
+ExecStart=/opt/proxy-scraper/venv/bin/python daemon.py --interval 6 --target 1000
+Restart=always
+RestartSec=30
+StandardOutput=append:/opt/proxy-scraper/logs/daemon.log
+StandardError=append:/opt/proxy-scraper/logs/daemon.log
+
+# Environment
+EnvironmentFile=/opt/proxy-scraper/.env
+
+# Process limits
+LimitNOFILE=65535
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
