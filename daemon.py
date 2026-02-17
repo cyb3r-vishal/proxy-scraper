@@ -52,7 +52,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 from scraper import scrape, SOURCES
 from checker import check_all, ProxyResult, TIMEOUT_SECONDS
-from telegram_bot import TelegramBot
+from telegram_bot import TelegramBot, TelegramLogHandler
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -95,9 +95,12 @@ def get_telegram_bot() -> TelegramBot | None:
 
 
 async def scrape_and_validate(
-    proto: str, target: int, timeout: int
+    proto: str, target: int, timeout: int, bot: TelegramBot | None = None
 ) -> list[ProxyResult]:
-    """Scrape and validate proxies for a single protocol type."""
+    """Scrape and validate proxies for a single protocol type.
+
+    Sends a .txt batch to Telegram every 10 live proxies found.
+    """
     log.info("── [%s] Scraping from %d sources...", proto.upper(), len(SOURCES[proto]))
 
     # Cap raw proxies to avoid checking millions, but keep enough for target.
@@ -117,12 +120,43 @@ async def scrape_and_validate(
 
     checked = 0
     live_count = 0
+    # Track unsent live proxies for batching every 10
+    unsent_live: list[ProxyResult] = []
+    batch_number = 0
+
+    async def _send_live_batch(batch_proxies: list[ProxyResult], batch_num: int):
+        """Send a batch of live proxies to Telegram as .txt."""
+        if not bot or not batch_proxies:
+            return
+        proxy_list = [r.proxy for r in batch_proxies]
+        avg_time = sum(r.response_time for r in batch_proxies) / len(batch_proxies)
+        caption = (
+            f"🔥 <b>{proto.upper()} Live Proxies — Batch #{batch_num}</b>\n\n"
+            f"📊 Count: <b>{len(batch_proxies)}</b>\n"
+            f"⚡ Avg Response: <b>{avg_time:.2f}s</b>\n"
+            f"🔍 Validation: <b>3/3 endpoints passed</b>\n"
+            f"📅 <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
+            f"🟢 <b>100% Live & Verified</b>"
+        )
+        await bot.send_file(proxy_list, f"{proto}_batch{batch_num}", caption=caption)
 
     def on_progress(done: int, total: int, result: ProxyResult):
-        nonlocal checked, live_count
+        nonlocal checked, live_count, unsent_live, batch_number
         checked = done
         if result.alive:
             live_count += 1
+            unsent_live.append(result)
+
+            # Send batch to Telegram every 10 live proxies
+            if len(unsent_live) >= 10:
+                batch_number += 1
+                batch_to_send = unsent_live[:]
+                unsent_live.clear()
+                # Schedule send on event loop (non-blocking)
+                asyncio.get_event_loop().create_task(
+                    _send_live_batch(batch_to_send, batch_number)
+                )
+
         # Log progress every 500 proxies
         if done % 500 == 0 or done == total:
             log.info(
@@ -131,6 +165,12 @@ async def scrape_and_validate(
             )
 
     live = await check_all(raw, proto, on_progress=on_progress, target=target)
+
+    # Send any remaining unsent live proxies (< 10)
+    if unsent_live and bot:
+        batch_number += 1
+        await _send_live_batch(unsent_live, batch_number)
+        unsent_live.clear()
 
     log.info(
         "── [%s] Validation complete: %d/%d live (%.1f%%)",
@@ -213,7 +253,7 @@ async def run_cycle(
             break
 
         try:
-            live = await scrape_and_validate(proto, target, timeout)
+            live = await scrape_and_validate(proto, target, timeout, bot=bot)
             all_results[proto] = live
 
             if live:
@@ -257,10 +297,17 @@ async def daemon_loop(args):
     load_env()
 
     bot = get_telegram_bot()
+    tg_log_handler = None
+
     if bot:
         ok = await bot.verify()
         if ok:
             log.info("Telegram bot connected successfully")
+            # Attach Telegram log handler — forward daemon logs to bot
+            loop = asyncio.get_event_loop()
+            tg_log_handler = TelegramLogHandler(bot, loop=loop, flush_interval=15.0)
+            logging.getLogger("daemon").addHandler(tg_log_handler)
+            log.info("Telegram log forwarding enabled")
         else:
             log.error("Telegram bot verification failed! Check your token.")
             bot = None
@@ -280,6 +327,9 @@ async def daemon_loop(args):
 
     if run_once:
         log.info("--once flag set. Exiting.")
+        # Flush remaining logs to Telegram before exit
+        if tg_log_handler:
+            await tg_log_handler.flush_remaining()
         return
 
     # Then loop on schedule
@@ -296,6 +346,10 @@ async def daemon_loop(args):
 
         if not SHUTDOWN.is_set():
             await run_cycle(types, target, timeout, bot)
+
+    # Flush remaining logs on shutdown
+    if tg_log_handler:
+        await tg_log_handler.flush_remaining()
 
 
 def handle_shutdown(signum, frame):

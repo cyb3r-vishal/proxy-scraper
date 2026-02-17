@@ -1,9 +1,12 @@
 """
 Telegram Bot - Sends validated live proxies as .txt files to Telegram.
+Also supports forwarding daemon logs to Telegram.
 """
 
+import asyncio
 import io
 import logging
+import time
 import httpx
 from datetime import datetime
 
@@ -105,3 +108,95 @@ class TelegramBot:
         except Exception as e:
             log.error("Telegram bot verification error: %s", e)
             return False
+
+
+# ---------------------------------------------------------------------------
+#  Telegram Log Handler — forwards daemon logs to Telegram
+# ---------------------------------------------------------------------------
+
+class TelegramLogHandler(logging.Handler):
+    """
+    Logging handler that batches log lines and sends them to Telegram
+    every `flush_interval` seconds to avoid API spam.
+    """
+
+    EMOJI_MAP = {
+        "DEBUG": "🔍",
+        "INFO": "ℹ️",
+        "WARNING": "⚠️",
+        "ERROR": "❌",
+        "CRITICAL": "🔴",
+    }
+
+    def __init__(
+        self,
+        bot: "TelegramBot",
+        loop: asyncio.AbstractEventLoop | None = None,
+        flush_interval: float = 15.0,
+        max_lines: int = 30,
+    ):
+        super().__init__(level=logging.INFO)
+        self.bot = bot
+        self._loop = loop
+        self._buffer: list[str] = []
+        self._lock = asyncio.Lock() if loop else None
+        self._flush_interval = flush_interval
+        self._max_lines = max_lines
+        self._last_flush = time.monotonic()
+        self._flush_task: asyncio.Task | None = None
+
+    def emit(self, record: logging.LogRecord):
+        """Buffer a log record and schedule a flush if needed."""
+        # Skip logs from the telegram module itself to prevent recursion
+        if record.name == "telegram":
+            return
+
+        emoji = self.EMOJI_MAP.get(record.levelname, "📝")
+        ts = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+        line = f"{emoji} <code>{ts}</code> {record.getMessage()}"
+        self._buffer.append(line)
+
+        # Flush if buffer is full or interval has passed
+        now = time.monotonic()
+        should_flush = (
+            len(self._buffer) >= self._max_lines
+            or now - self._last_flush >= self._flush_interval
+        )
+
+        if should_flush:
+            self._schedule_flush()
+
+    def _schedule_flush(self):
+        """Schedule an async flush on the event loop."""
+        loop = self._loop or asyncio.get_event_loop()
+        if self._flush_task is None or self._flush_task.done():
+            self._flush_task = loop.create_task(self._async_flush())
+
+    async def _async_flush(self):
+        """Send buffered lines to Telegram."""
+        if not self._buffer:
+            return
+
+        lines = self._buffer[: self._max_lines]
+        self._buffer = self._buffer[self._max_lines :]
+        self._last_flush = time.monotonic()
+
+        text = (
+            "📋 <b>Daemon Logs</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            + "\n".join(lines)
+        )
+
+        # Telegram message limit is 4096 chars
+        if len(text) > 4000:
+            text = text[:4000] + "\n<i>... truncated</i>"
+
+        try:
+            await self.bot.send_message(text)
+        except Exception:
+            pass  # Don't let Telegram errors break logging
+
+    async def flush_remaining(self):
+        """Flush any remaining buffered logs (call before shutdown)."""
+        while self._buffer:
+            await self._async_flush()
